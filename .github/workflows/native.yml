@@ -1,0 +1,149 @@
+name: native
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-tests:
+    name: Host tests + benchmark + fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          g++ --version | head -1
+          cmake --version | head -1
+
+      - name: Configure (Release)
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAPEX_VT_BUILD_TESTS=ON \
+            -DAPEX_VT_BUILD_FUZZ=ON \
+            -DAPEX_VT_BUILD_JNI=OFF
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run unit + parity tests
+        run: ./build/vt_tests 2>&1 | tee host-tests.log
+
+      - name: Run deterministic fuzz
+        run: ./build/vt_fuzz 0xC0FFEE 20000 2>&1 | tee fuzz.log
+
+      - name: JNI bridge compile check (stub headers)
+        run: |
+          g++ -std=c++17 -O1 -Wall -Itests/jni_stub -Isrc -Iinclude \
+            -fsyntax-only src/jni/vt_jni.cpp
+          echo "JNI bridge type-checks against the stub jni.h"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-logs
+          path: |
+            host-tests.log
+            fuzz.log
+          if-no-files-found: ignore
+
+  android-ndk:
+    name: NDK cross-compile (${{ matrix.abi }})
+    runs-on: ubuntu-latest
+    needs: host-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate (or install) the Android NDK
+        run: |
+          NDK_DIR=""
+          if [ -d "$ANDROID_HOME/ndk" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+          fi
+          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
+            echo "No preinstalled NDK — installing r27c"
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+              "ndk;27.2.12479018" > /dev/null 2>&1 || true
+            NDK_DIR="$ANDROID_HOME/ndk/27.2.12479018"
+          fi
+          echo "Using NDK: $NDK_DIR"
+          echo "NDK_DIR=$NDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Build libvt_native.so
+        run: |
+          cmake -S . -B build-${{ matrix.abi }} \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAPEX_VT_BUILD_JNI=ON \
+            -DAPEX_VT_BUILD_TESTS=OFF \
+            -DAPEX_VT_BUILD_FUZZ=OFF
+          cmake --build build-${{ matrix.abi }} -j"$(nproc)"
+
+      - name: Verify artifact
+        run: |
+          set -e
+          SO="build-${{ matrix.abi }}/libvt_native.so"
+          ls -la "$SO"
+          file "$SO"
+          # ELF sanity: must be a shared object for the right machine
+          file "$SO" | grep -E "ELF (32|64)-bit"
+
+      - name: Upload .so
+        uses: actions/upload-artifact@v4
+        with:
+          name: libvt-native-${{ matrix.abi }}
+          path: build-${{ matrix.abi }}/libvt_native.so
+          if-no-files-found: error
+
+  release:
+    name: Release (tags)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [host-tests, android-ndk]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all .so artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: libvt-native-*
+          merge-multiple: true
+
+      - name: Bundle
+        run: |
+          mkdir -p dist
+          for so in libvt_native.so */libvt_native.so; do
+            [ -f "$so" ] || continue
+            d=$(dirname "$so")
+            n=$(basename "$d")
+            [ "$n" = "." ] && n="host"
+            mkdir -p "dist/$n"
+            cp "$so" "dist/$n/"
+          done
+          zip -r dist/apex-vt-native-${GITHUB_REF_NAME}.zip dist
+          ls -la dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist/apex-vt-native-${{ github.ref_name }}.zip

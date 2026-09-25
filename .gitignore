@@ -1,0 +1,17 @@
+# Build outputs
+build*/
+out/
+dist/
+*.o
+*.so
+*.a
+*.dylib
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Logs from local runs
+*.log
