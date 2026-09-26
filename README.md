@@ -147,3 +147,21 @@ See the main repo's `terminal-native/VENDOR.md` for the vendoring contract.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## v0.2 — Foundation Capabilities
+
+v0.2 adds ~10k lines of **necessary basic capabilities** on top of the v0.1
+zero-allocation VT engine core (no speculative features — everything here is
+what a production Android terminal needs):
+
+| Module | Capability |
+|---|---|
+| `vt_unicode_data` / `vt_grapheme` | Full East Asian Width tables + UAX #29 extended grapheme clusters (GB1–GB13, emoji ZWJ families, RI flags) — correct cursor movement, selection and copy |
+| `vt_input` | Key encoding honoring DECCKM / DECKPAM / modifyOtherKeys 1-2 / Kitty; paste sanitization + bracketed-paste wrapping (anti sequence-injection) |
+| `vt_mouse` | Mouse reporting: X10 / normal / button / any-event tracking × X11 / UTF-8 / SGR / urxvt encodings, byte-exact |
+| `vt_lines` / `vt_search` / `vt_reflow` | Logical line assembly over wrapped rows; Ctrl+F search (cross-wrap, case-folded, whole-word) over screen + scrollback; **resize reflow — content survives rotation / split-screen / foldables** |
+| `vt_session` | Binary session persistence (CRC-guarded, strict validation) — terminal state survives Android process death |
+| engine | OSC 8 hyperlinks (sparse spans, bounded table), DECRQM, DECSED/DECSEL/DECSCA protection, DECERA/DECSERA/DECCRA/DECFRA rectangles, XTPUSHSGR stack, focus reporting (1004), alternate scroll (1007), sync output (2026), OSC 4/10/11/12 color queries, touch selection (word/line, global rows) |
+| JNI / Kotlin | All of the above exposed through one-call flat-array snapshots + mode-aware input encoders |
+
+370 host tests (v0.1 parity + 241 new), fuzz clean, ASAN/UBSAN clean.

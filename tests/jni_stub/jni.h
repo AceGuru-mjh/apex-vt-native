@@ -50,10 +50,18 @@ struct JNIEnv {
   jclass (*FindClass)(const char*);
   jint (*ThrowNew)(jclass, const char*);
   void (*DeleteLocalRef)(jobject);
+  // v0.2: string access for paste/search/title paths.
+  jsize (*GetStringLength)(jstring);
+  const jchar* (*GetStringChars)(jstring, jboolean*);
+  void (*ReleaseStringChars)(jstring, const jchar*);
+  const char* (*GetStringUTFChars)(jstring, jboolean*);
+  void (*ReleaseStringUTFChars)(jstring, const char*);
 };
 
 #define JNIEXPORT
 #define JNICALL
 #define JNI_ABORT 0
+#define JNI_TRUE 1
+#define JNI_FALSE 0
 
 extern "C" struct JNIEnv* stubEnv();
